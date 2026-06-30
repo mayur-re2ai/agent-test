@@ -48,25 +48,63 @@
     }
 
     // ---- Lifecycle wiring -------------------------------------------------
-    // We do NOT auto-open the chat. The launcher icon behaves normally and the
-    // user clicks it themselves. We only seed the hidden trigger message AFTER
-    // the user has opened the conversation, so the product list appears for
-    // them without them having to type anything.
+    // We do NOT auto-open the chat — the launcher icon behaves normally and the
+    // user clicks it. We seed the trigger message only AFTER the agent has
+    // actually joined the conversation, otherwise the message lands before the
+    // agent is listening and only the generic greeting comes back.
     //
-    // The send API is only valid once the conversation channel is open, so
-    // onEmbeddedMessagingConversationOpened is the correct moment to seed.
-    window.addEventListener("onEmbeddedMessagingConversationOpened", function () {
-      console.log("[DENT] onEmbeddedMessagingConversationOpened -> sending seed");
-      dentSendSeedMessage();
+    // There is no dedicated "agent joined" bootstrap event, so we watch the
+    // conversation entries the client emits and look for the participant-join
+    // / agent-message entry. We also keep a timed fallback in case the entry
+    // event shape differs in this org version.
+
+    var dentConversationLive = false;
+
+    // Primary path: listen for conversation entries and fire once the agent
+    // participates (a routing-result "joined" entry or the first agent message).
+    window.addEventListener("onEmbeddedMessagingConversationEntry", function (evt) {
+      try {
+        var d = (evt && evt.detail) ? evt.detail : {};
+        var t = (d.entryType || d.type || "").toString().toLowerCase();
+        var sender = ((d.sender && (d.sender.role || d.sender.type)) || d.senderRole || "").toString().toLowerCase();
+        console.log("[DENT] conversationEntry:", t, "sender:", sender);
+
+        // Agent has joined (participant change) or has produced any content.
+        var agentJoined =
+          t.indexOf("participant") !== -1 ||
+          t.indexOf("routingresult") !== -1 ||
+          t.indexOf("routing") !== -1 ||
+          sender === "agent" || sender === "chatbot" || sender === "system";
+
+        if (agentJoined) {
+          dentConversationLive = true;
+          dentSendSeedMessage();
+        }
+      } catch (e) {
+        console.warn("[DENT] conversationEntry handler error:", e);
+      }
     });
 
-    // Fallback: some session states reuse an existing conversation and may
-    // not re-fire ConversationOpened. ConversationStarted covers a brand-new
-    // conversation; we attempt the seed there too (the once-guard prevents
-    // a duplicate send).
+    // Mark the conversation channel open so the fallback knows it may seed.
+    window.addEventListener("onEmbeddedMessagingConversationOpened", function () {
+      console.log("[DENT] onEmbeddedMessagingConversationOpened");
+      dentConversationLive = true;
+    });
     window.addEventListener("onEmbeddedMessagingConversationStarted", function () {
       console.log("[DENT] onEmbeddedMessagingConversationStarted");
-      dentSendSeedMessage();
+      dentConversationLive = true;
+    });
+
+    // Fallback: if the entry event never matched (org/version differences),
+    // give the agent a moment to join, then seed once. The once-guard on
+    // dentSendSeedMessage prevents any duplicate with the primary path.
+    window.addEventListener("onEmbeddedMessagingConversationOpened", function () {
+      setTimeout(function () {
+        if (!dentSeedSent && dentConversationLive) {
+          console.log("[DENT] Fallback timer -> seeding after agent-join grace period");
+          dentSendSeedMessage();
+        }
+      }, 2500);
     });
   </script>
 
