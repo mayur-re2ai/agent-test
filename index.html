@@ -48,46 +48,13 @@
     }
 
     // ---- Lifecycle wiring -------------------------------------------------
-    // Auto-open the chat window without a click. We must wait until the
-    // launcher button markup actually exists, otherwise launchChat() rejects
-    // with "Default chat button isn't present." onEmbeddedMessagingButtonCreated
-    // fires exactly when that button is in the DOM, which is the correct moment.
-    var dentChatLaunched = false;
-
-    function dentLaunchChat(reason) {
-      if (dentChatLaunched) return;
-      try {
-        embeddedservice_bootstrap.utilAPI
-          .launchChat()
-          .then(function () {
-            dentChatLaunched = true;
-            console.log("[DENT] launchChat succeeded (" + reason + ")");
-          })
-          .catch(function (e) {
-            // Not yet ready — retry shortly. The button may still be rendering.
-            console.warn("[DENT] launchChat rejected (" + reason + "), retrying:", e);
-            setTimeout(function () { dentLaunchChat("retry"); }, 400);
-          });
-      } catch (e) {
-        console.warn("[DENT] launchChat threw (" + reason + "):", e);
-        setTimeout(function () { dentLaunchChat("retry"); }, 400);
-      }
-    }
-
-    window.addEventListener("onEmbeddedMessagingButtonCreated", function () {
-      console.log("[DENT] onEmbeddedMessagingButtonCreated -> launching chat");
-      dentLaunchChat("ButtonCreated");
-    });
-
-    // Fallback in case ButtonCreated already fired before this listener ran:
-    // attempt a launch a moment after Ready too (guarded so it won't double-open).
-    window.addEventListener("onEmbeddedMessagingReady", function () {
-      console.log("[DENT] onEmbeddedMessagingReady");
-      setTimeout(function () { dentLaunchChat("Ready-fallback"); }, 600);
-    });
-
-    // The send API is only valid AFTER the conversation channel is open.
-    // This event is the correct, supported moment to seed the message.
+    // We do NOT auto-open the chat. The launcher icon behaves normally and the
+    // user clicks it themselves. We only seed the hidden trigger message AFTER
+    // the user has opened the conversation, so the product list appears for
+    // them without them having to type anything.
+    //
+    // The send API is only valid once the conversation channel is open, so
+    // onEmbeddedMessagingConversationOpened is the correct moment to seed.
     window.addEventListener("onEmbeddedMessagingConversationOpened", function () {
       console.log("[DENT] onEmbeddedMessagingConversationOpened -> sending seed");
       dentSendSeedMessage();
