@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DENT Agentforce – Embedded Messaging Test (UAT)</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 40px; color: #222; }
+    .note { background: #f3f5f7; border: 1px solid #d8dde2; border-radius: 8px; padding: 16px 18px; max-width: 640px; }
+    code { background: #eceff1; padding: 1px 5px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>DENT Instruments – Agentforce Test Page (UAT Sandbox)</h1>
+  <div class="note">
+    <p>This page loads the Embedded Messaging deployment, auto-opens the chat,
+       and sends a hidden seed message once the conversation is open so the
+       agent returns the product list without the user typing anything.</p>
+    <p>Open the browser console to follow the lifecycle events.</p>
+  </div>
+
+  <!-- ============================================================
+       1. The seed message the agent should receive on open.
+          Change this string to match the utterance your
+          Welcome / Product Selection topic listens for.
+       ============================================================ -->
+  <script type="text/javascript">
+    var DENT_SEED_MESSAGE = "Show me your products";
+
+    // Guard so we only send the seed once per page load.
+    var dentSeedSent = false;
+
+    function dentSendSeedMessage() {
+      if (dentSeedSent) return;
+      try {
+        embeddedservice_bootstrap.utilAPI
+          .sendTextMessage(DENT_SEED_MESSAGE)
+          .then(function () {
+            dentSeedSent = true;
+            console.log("[DENT] Seed message sent:", DENT_SEED_MESSAGE);
+          })
+          .catch(function (e) {
+            console.warn("[DENT] sendTextMessage rejected:", e);
+          });
+      } catch (e) {
+        console.warn("[DENT] sendTextMessage threw:", e);
+      }
+    }
+
+    // ---- Lifecycle wiring -------------------------------------------------
+    // Auto-open the chat window as soon as the client is ready (no click).
+    window.addEventListener("onEmbeddedMessagingReady", function () {
+      console.log("[DENT] onEmbeddedMessagingReady -> launching chat");
+      try {
+        embeddedservice_bootstrap.utilAPI.launchChat();
+      } catch (e) {
+        console.warn("[DENT] launchChat threw:", e);
+      }
+    });
+
+    // The send API is only valid AFTER the conversation channel is open.
+    // This event is the correct, supported moment to seed the message.
+    window.addEventListener("onEmbeddedMessagingConversationOpened", function () {
+      console.log("[DENT] onEmbeddedMessagingConversationOpened -> sending seed");
+      dentSendSeedMessage();
+    });
+
+    // Fallback: some session states reuse an existing conversation and may
+    // not re-fire ConversationOpened. ConversationStarted covers a brand-new
+    // conversation; we attempt the seed there too (the once-guard prevents
+    // a duplicate send).
+    window.addEventListener("onEmbeddedMessagingConversationStarted", function () {
+      console.log("[DENT] onEmbeddedMessagingConversationStarted");
+      dentSendSeedMessage();
+    });
+  </script>
+
+  <!-- ============================================================
+       2. Your UAT sandbox deployment snippet (unchanged).
+       ============================================================ -->
+  <script type="text/javascript">
+    function initEmbeddedMessaging() {
+      try {
+        embeddedservice_bootstrap.settings.language = 'en_US'; // e.g. 'en' or 'en-US'
+        embeddedservice_bootstrap.init(
+          '00DU700000AmhRV',
+          'DENT_Service_Web_Deployment',
+          'https://dentinstruments2021--uatsandbox.sandbox.my.site.com/ESWDENTServiceWebDeplo1780648464305',
+          {
+            scrt2URL: 'https://dentinstruments2021--uatsandbox.sandbox.my.salesforce-scrt.com'
+          }
+        );
+      } catch (err) {
+        console.error('Error loading Embedded Messaging: ', err);
+      }
+    }
+  </script>
+  <script
+    type="text/javascript"
+    src="https://dentinstruments2021--uatsandbox.sandbox.my.site.com/ESWDENTServiceWebDeplo1780648464305/assets/js/bootstrap.min.js"
+    onload="initEmbeddedMessaging()">
+  </script>
+</body>
+</html>
