@@ -11,7 +11,7 @@
   </style>
 </head>
 <body>
-  <h1>DENT Instruments – Agentforce Test (UAT Sandbox)</h1>
+  <h1>DENT Instruments – Agentforce Test  (UAT)</h1>
   <div class="note">
     <p>This page loads the Embedded Messaging deployment, auto-opens the chat,
        and sends a hidden seed message once the conversation is open so the
@@ -79,16 +79,8 @@
       if (dentConversationLive) dentMarkUserInteracted("window blur / iframe focus");
     });
 
-    // If the client emits an entry for a user-sent message, cancel too.
-    window.addEventListener("onEmbeddedMessagingConversationEntry", function (evt) {
-      try {
-        var d = (evt && evt.detail) ? evt.detail : {};
-        var sender = ((d.sender && (d.sender.role || d.sender.type)) || d.senderRole || "").toString().toLowerCase();
-        if (sender === "enduser" || sender === "user" || sender === "customer") {
-          dentMarkUserInteracted("user message entry");
-        }
-      } catch (e) { /* ignore */ }
-    });
+    // (Agent/user conversation-entry handling is registered further below,
+    // where a single handler decides whether to seed or cancel.)
 
     window.addEventListener("onEmbeddedMessagingConversationOpened", function () {
       console.log("[DENT] onEmbeddedMessagingConversationOpened");
@@ -99,19 +91,64 @@
       dentConversationLive = true;
     });
 
-    // Seed shortly after the conversation opens. Short enough that a passive
-    // user gets the product list almost immediately; the interaction guard
-    // above protects the fast user. Tune if the greeting/seed order races.
-    var DENT_SEED_DELAY_MS = 1200;
+    // ---- Seed timing --------------------------------------------------------
+    // The seed MUST land after the agent has joined and posted its greeting,
+    // otherwise the agent only replies with the generic greeting. The reliable
+    // signal for "agent has produced content" is the agent's own conversation
+    // entry. We listen broadly and seed on the FIRST agent/system/bot entry.
+    //
+    // A long timer (4s) is kept ONLY as a last resort in case no agent entry is
+    // observed at all — but it is still cancelled by user interaction, and by
+    // then the agent has almost certainly greeted.
+    function dentSeedOnAgentEntry(evt) {
+      if (dentSeedSent || dentUserInteracted) return;
+      try {
+        var d = (evt && evt.detail) ? evt.detail : {};
+        var t = (d.entryType || d.type || d.messageType || "").toString().toLowerCase();
+        var sender = ((d.sender && (d.sender.role || d.sender.type || d.sender.appType)) ||
+                      d.senderRole || d.actorType || "").toString().toLowerCase();
+        console.log("[DENT] conversationEntry -> type:", t, "sender:", sender);
+
+        var isUser = sender === "enduser" || sender === "user" || sender === "customer";
+        if (isUser) { dentMarkUserInteracted("user message entry"); return; }
+
+        var isAgentContent =
+          sender === "agent" || sender === "chatbot" || sender === "bot" ||
+          sender === "system" || sender.indexOf("agent") !== -1 ||
+          t.indexOf("message") !== -1 || t.indexOf("participant") !== -1 ||
+          t.indexOf("routing") !== -1;
+
+        if (isAgentContent) {
+          console.log("[DENT] Agent content detected -> seeding");
+          dentSendSeedMessage();
+        }
+      } catch (e) {
+        console.warn("[DENT] entry handler error:", e);
+      }
+    }
+
+    // Register the same handler under the event-name variants Salesforce has
+    // used across MIAW versions, so we catch whichever one this org fires.
+    [
+      "onEmbeddedMessagingConversationEntry",
+      "onEmbeddedMessagingNewMessage",
+      "onEmbeddedMessagingMessageReceived"
+    ].forEach(function (name) {
+      window.addEventListener(name, dentSeedOnAgentEntry);
+    });
+
+    // Last-resort fallback: only if no agent entry was ever seen. 4s is long
+    // enough that the greeting has landed; the interaction guard still applies.
+    var DENT_SEED_FALLBACK_MS = 4000;
     window.addEventListener("onEmbeddedMessagingConversationOpened", function () {
       setTimeout(function () {
         if (!dentSeedSent && !dentUserInteracted && dentConversationLive) {
-          console.log("[DENT] Seeding (no user interaction yet)");
+          console.log("[DENT] Fallback seed (no agent entry observed)");
           dentSendSeedMessage();
         } else {
-          console.log("[DENT] Skipping seed (already sent or user interacted)");
+          console.log("[DENT] Fallback skipped (already seeded / user interacted)");
         }
-      }, DENT_SEED_DELAY_MS);
+      }, DENT_SEED_FALLBACK_MS);
     });
   </script>
 
