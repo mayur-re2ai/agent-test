@@ -11,7 +11,7 @@
   </style>
 </head>
 <body>
-  <h1>DENT Instruments – Agentforce Test Page (UAT Sandbox)</h1>
+  <h1>DENT Instruments – Agentforce Test (UAT Sandbox)</h1>
   <div class="note">
     <p>This page loads the Embedded Messaging deployment, auto-opens the chat,
        and sends a hidden seed message once the conversation is open so the
@@ -30,8 +30,12 @@
     // Guard so we only send the seed once per page load.
     var dentSeedSent = false;
 
+    // If the user starts interacting (types or sends) before we auto-seed,
+    // we cancel the auto-seed so we don't talk over them or duplicate intent.
+    var dentUserInteracted = false;
+
     function dentSendSeedMessage() {
-      if (dentSeedSent) return;
+      if (dentSeedSent || dentUserInteracted) return;
       try {
         embeddedservice_bootstrap.utilAPI
           .sendTextMessage(DENT_SEED_MESSAGE)
@@ -49,43 +53,43 @@
 
     // ---- Lifecycle wiring -------------------------------------------------
     // We do NOT auto-open the chat — the launcher icon behaves normally and the
-    // user clicks it. We seed the trigger message only AFTER the agent has
-    // actually joined the conversation, otherwise the message lands before the
-    // agent is listening and only the generic greeting comes back.
-    //
-    // There is no dedicated "agent joined" bootstrap event, so we watch the
-    // conversation entries the client emits and look for the participant-join
-    // / agent-message entry. We also keep a timed fallback in case the entry
-    // event shape differs in this org version.
+    // user clicks it. We seed the trigger message shortly after the conversation
+    // opens, but we cancel the auto-seed if the user has already started typing
+    // or has sent their own message, so a fast user is never talked over.
 
     var dentConversationLive = false;
 
-    // Primary path: listen for conversation entries and fire once the agent
-    // participates (a routing-result "joined" entry or the first agent message).
+    // Detect early user interaction. The chat input lives inside a cross-origin
+    // iframe we can't read, but two signals are reachable from the parent:
+    //   1) the user sending a message fires a conversation event, and
+    //   2) the user focusing/typing in the iframe blurs the parent window.
+    // Either one cancels the pending auto-seed.
+    function dentMarkUserInteracted(reason) {
+      if (dentSeedSent) return; // already seeded; nothing to cancel
+      if (!dentUserInteracted) {
+        dentUserInteracted = true;
+        console.log("[DENT] User interaction detected (" + reason + ") -> auto-seed cancelled");
+      }
+    }
+
+    // When the user clicks/types into the chat iframe, the parent window loses
+    // focus. That's our earliest reliable "user is engaging" signal.
+    window.addEventListener("blur", function () {
+      // Only count this once the chat is actually open, to avoid false positives.
+      if (dentConversationLive) dentMarkUserInteracted("window blur / iframe focus");
+    });
+
+    // If the client emits an entry for a user-sent message, cancel too.
     window.addEventListener("onEmbeddedMessagingConversationEntry", function (evt) {
       try {
         var d = (evt && evt.detail) ? evt.detail : {};
-        var t = (d.entryType || d.type || "").toString().toLowerCase();
         var sender = ((d.sender && (d.sender.role || d.sender.type)) || d.senderRole || "").toString().toLowerCase();
-        console.log("[DENT] conversationEntry:", t, "sender:", sender);
-
-        // Agent has joined (participant change) or has produced any content.
-        var agentJoined =
-          t.indexOf("participant") !== -1 ||
-          t.indexOf("routingresult") !== -1 ||
-          t.indexOf("routing") !== -1 ||
-          sender === "agent" || sender === "chatbot" || sender === "system";
-
-        if (agentJoined) {
-          dentConversationLive = true;
-          dentSendSeedMessage();
+        if (sender === "enduser" || sender === "user" || sender === "customer") {
+          dentMarkUserInteracted("user message entry");
         }
-      } catch (e) {
-        console.warn("[DENT] conversationEntry handler error:", e);
-      }
+      } catch (e) { /* ignore */ }
     });
 
-    // Mark the conversation channel open so the fallback knows it may seed.
     window.addEventListener("onEmbeddedMessagingConversationOpened", function () {
       console.log("[DENT] onEmbeddedMessagingConversationOpened");
       dentConversationLive = true;
@@ -95,16 +99,19 @@
       dentConversationLive = true;
     });
 
-    // Fallback: if the entry event never matched (org/version differences),
-    // give the agent a moment to join, then seed once. The once-guard on
-    // dentSendSeedMessage prevents any duplicate with the primary path.
+    // Seed shortly after the conversation opens. Short enough that a passive
+    // user gets the product list almost immediately; the interaction guard
+    // above protects the fast user. Tune if the greeting/seed order races.
+    var DENT_SEED_DELAY_MS = 1200;
     window.addEventListener("onEmbeddedMessagingConversationOpened", function () {
       setTimeout(function () {
-        if (!dentSeedSent && dentConversationLive) {
-          console.log("[DENT] Fallback timer -> seeding after agent-join grace period");
+        if (!dentSeedSent && !dentUserInteracted && dentConversationLive) {
+          console.log("[DENT] Seeding (no user interaction yet)");
           dentSendSeedMessage();
+        } else {
+          console.log("[DENT] Skipping seed (already sent or user interacted)");
         }
-      }, 2500);
+      }, DENT_SEED_DELAY_MS);
     });
   </script>
 
